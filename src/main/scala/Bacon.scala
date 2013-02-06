@@ -22,14 +22,13 @@ object Bacon {
   }
   def fromPoll[T](delay: Long, poll: (() => Event[T])) = {
     new EventStream[T]({
-      observer: Observer[T] => {
-        // TODO: thread-safety?
-        var ended = false
+      dispatcher: Observer[T] => {
+        val ended = new Flag
         def schedule {
           Scheduler.delay(delay) {
-            if (!ended) {
+            if (!ended.get) {
               val event = poll()
-              val continue = observer(event)
+              val continue = dispatcher(event)
               if (continue && !event.isEnd) {
                 schedule
               }
@@ -37,7 +36,7 @@ object Bacon {
           }
         }
         schedule
-        () => { ended = true } // Not the hottest way to send a signal
+        () => { ended.set(true) }
       }
     })
   }
@@ -88,6 +87,7 @@ object Bacon {
             unsubFromSrc = Some(subscribeFunc(handleEvent))
         }
         val unsubThis: Dispose = () => {
+          // TODO: queue these
           removeObserver(obs)
           checkUnsub
         }
@@ -98,6 +98,7 @@ object Bacon {
       observers = observers.filterNot(_ == o)
     }
     private def handleEvent(event: Event[T]) = {
+      // TODO: queue these
       if (event.isEnd) ended = true
       observers.foreach { obs =>
         val continue = obs(event)
@@ -120,6 +121,8 @@ object Bacon {
       }, delay)
     }
   }
+
+  type Flag = java.util.concurrent.atomic.AtomicBoolean
 
   val nop: Dispose = () => {}
 }
