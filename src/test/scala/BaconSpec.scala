@@ -8,6 +8,11 @@ class BaconSpec extends Specification {
       expectStreamEvents(() => Bacon.once("bacon"), "bacon")
     }
   }
+  "Bacon.fromValues" should {
+    "produce values from list" in {
+      expectStreamEvents(() => Bacon.fromValues(1, 2, 3), 1, 2, 3)
+    }
+  }
 
   def expectStreamEvents[T](src: () => EventStream[T], expectedValues: T*) = {
     verifySingleObserver(src, expectedValues : _*)

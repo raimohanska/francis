@@ -1,12 +1,13 @@
 object Bacon {
   def once[T](value: T): EventStream[T] = fromList(List(value))
-  def fromList[T](values: List[T]): EventStream[T] = new EventStream[T]({
+  def fromList[T](values: Seq[T]): EventStream[T] = new EventStream[T]({
     observer: Observer[T] => {
       values.foreach { value => observer(Next(value)) }
       observer(End())
       nop
     }
   })
+  def fromValues[T](values: T*): EventStream[T] = fromList(values)
 
   trait Observable[T] {
     def subscribe(obs: Observer[T]): Dispose
