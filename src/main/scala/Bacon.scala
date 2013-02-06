@@ -41,26 +41,36 @@ object Bacon {
   class Dispatcher[T](subscribeFunc: (Observer[T] => Dispose)) {
     private var unsubFromSrc: Option[Dispose] = None
     private var observers: List[Observer[T]] = Nil
+    private var ended = false
 
     def subscribe(obs: Observer[T]): Dispose = {
-      observers = observers :+ obs
-      observers.length match {
-        case 1 => 
-          unsubFromSrc = Some(subscribeFunc(observer))
-        case _ => 
-      }
-      val unsubThis: Dispose = () => {
-        observers = observers.filterNot(_ == obs)
-        checkUnsub
-      }
-      unsubThis
-    }
-    private val observer: Observer[T] = {
-      event => 
-        observers.foreach { obs =>
-          obs(event)
+      // TODO: queue these
+      if (ended) {
+        obs(End())
+        nop
+      } else {
+        observers = observers :+ obs
+        if (observers.length == 1) {
+            unsubFromSrc = Some(subscribeFunc(handleEvent))
         }
-        true
+        val unsubThis: Dispose = () => {
+          removeObserver(obs)
+          checkUnsub
+        }
+        unsubThis
+      }
+    }
+    private def removeObserver(o: Observer[T]) {
+      observers = observers.filterNot(_ == o)
+    }
+    private def handleEvent(event: Event[T]) = {
+      if (event.isEnd) ended = true
+      observers.foreach { obs =>
+        val continue = obs(event)
+        if (!continue) removeObserver(obs)
+      }
+      if (event.isEnd) observers = Nil
+      !observers.isEmpty
     }
     private def checkUnsub = (observers.length, unsubFromSrc) match {
       case (1, Some(f)) => f
