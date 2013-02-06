@@ -75,37 +75,50 @@ object Bacon {
     private var unsubFromSrc: Option[Dispose] = None
     private var observers: List[Observer[T]] = Nil
     private var ended = false
+    private var queue: Queue[() => Unit] = new Queue(1000)
 
     def subscribe(obs: Observer[T]): Dispose = {
-      // TODO: queue these
-      if (ended) {
-        obs(End())
-        nop
-      } else {
-        observers = observers :+ obs
-        if (observers.length == 1) {
-            unsubFromSrc = Some(subscribeFunc(handleEvent))
+      val unsubThis: Dispose = () => queued {
+        removeObserver(obs)
+        checkUnsub
+      }
+
+      queued {
+        if (ended) {
+          obs(End())
+        } else {
+          observers = observers :+ obs
+          if (observers.length == 1) {
+              unsubFromSrc = Some(subscribeFunc(handleEvent))
+          }
         }
-        val unsubThis: Dispose = () => {
-          // TODO: queue these
-          removeObserver(obs)
-          checkUnsub
+      }
+
+      unsubThis
+    }
+    private def queued(block: => Unit) {
+      queue.add(() => block)
+      Scheduler.delay(0) {
+        while (!queue.isEmpty()) {
+          val task = queue.poll()
+          task()
         }
-        unsubThis
       }
     }
     private def removeObserver(o: Observer[T]) {
       observers = observers.filterNot(_ == o)
     }
     private def handleEvent(event: Event[T]) = {
-      // TODO: queue these
-      if (event.isEnd) ended = true
-      observers.foreach { obs =>
-        val continue = obs(event)
-        if (!continue) removeObserver(obs)
+      queued {
+        if (event.isEnd) ended = true
+        observers.foreach { obs =>
+          val continue = obs(event)
+          if (!continue) removeObserver(obs)
+        }
+        if (event.isEnd) observers = Nil
+        checkUnsub
       }
-      if (event.isEnd) observers = Nil
-      !observers.isEmpty
+      true
     }
     private def checkUnsub = (observers.length, unsubFromSrc) match {
       case (1, Some(f)) => f
@@ -123,6 +136,7 @@ object Bacon {
   }
 
   type Flag = java.util.concurrent.atomic.AtomicBoolean
+  type Queue[T] = java.util.concurrent.ArrayBlockingQueue[T]
 
   val nop: Dispose = () => {}
 }
