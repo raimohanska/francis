@@ -8,6 +8,39 @@ object Bacon {
     }
   })
   def fromValues[T](values: T*): EventStream[T] = fromList(values)
+  def later[T](delay: Long, value: T) = sequentially(delay, value :: Nil)
+  def sequentially[T](delay: Long, values: List[T]): EventStream[T] = {
+    var index = -1
+    def poll: Event[T] = {
+      index = index + 1
+      if (index < values.length)
+        Next(values(index))
+      else
+        End()
+    }
+    fromPoll(delay, () => poll)
+  }
+  def fromPoll[T](delay: Long, poll: (() => Event[T])) = {
+    new EventStream[T]({
+      observer: Observer[T] => {
+        // TODO: thread-safety?
+        var ended = false
+        def schedule {
+          Scheduler.delay(delay) {
+            if (!ended) {
+              val event = poll()
+              val continue = observer(event)
+              if (continue && !event.isEnd) {
+                schedule
+              }
+            }
+          }
+        }
+        schedule
+        () => { ended = true } // Not the hottest way to send a signal
+      }
+    })
+  }
 
   trait Observable[T] {
     def subscribe(obs: Observer[T]): Dispose
