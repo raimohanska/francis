@@ -1,8 +1,12 @@
+package bacon
+
 import org.specs2.mutable._
 
 import Bacon._
 
 class BaconSpec extends Specification {
+  args(sequential=true)
+
   "Bacon.once" should {
     "produce one value" in {
       expectStreamEvents(() => Bacon.once("bacon"), "bacon")
@@ -20,17 +24,24 @@ class BaconSpec extends Specification {
   }
   "Bacon.sequentially" should {
     "produce a list of values" in {
-      expectStreamEvents(() => Bacon.sequentially(T(1), List(1,2,3)), 1,2,3)
+      expectStreamEvents(() => series(1, List(1,2,3)), 1,2,3)
     }
   }
   "EventStream.map" should {
     "map values using given function" in {
-      expectStreamEvents(() => Bacon.sequentially(T(1), List(1,2,3)).map(_ * 10), 10, 20, 30)
+      expectStreamEvents(() => series(1, List(1,2,3)).map(_ * 10), 10, 20, 30)
     }
   }
 
   val unitTime = 10
   def T(units: Int): Int = units * unitTime
+
+  def series[T](delay: Int, values: List[T]) = {
+    val stream = Bacon.sequentially(T(delay), values)
+    seqs = stream :: seqs
+    stream
+  }
+  var seqs: List[EventStream[_]] = Nil
 
   def expectStreamEvents[T](src: () => EventStream[T], expectedValues: T*) = {
     verifySingleObserver(src, expectedValues : _*)
@@ -42,6 +53,7 @@ class BaconSpec extends Specification {
     val values = drain(stream)
     values must_== expectedValues
     verifyExhausted(stream)
+    verifyCleanup
   }
 
   def verifySwitching[T](src: () => EventStream[T], expectedValues: T*) = {
@@ -60,10 +72,20 @@ class BaconSpec extends Specification {
     val values = result.take
     values must_== expectedValues
     verifyExhausted(stream)
+    verifyCleanup
   }
 
   def verifyExhausted[T](src: Observable[T]) = {
     drain(src) must_== Nil
+  }
+
+  def verifyCleanup = {
+    try {
+      seqs.foreach { seq => seq.hasObservers must_== false }
+    } finally {
+      seqs = Nil
+    }
+    success
   }
 
   def drain[T](stream: Observable[T]): List[T] = {

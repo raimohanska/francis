@@ -1,3 +1,5 @@
+package bacon
+
 object Bacon {
   def once[T](value: T): EventStream[T] = fromList(List(value))
   def fromList[T](values: Seq[T]): EventStream[T] = new EventStream[T]({
@@ -56,6 +58,8 @@ object Bacon {
       val dispatcher = new Dispatcher[A, B]({ o: Observer[A] => this.subscribe(o)}, handler)
       new EventStream({ o: Observer[B] => dispatcher.subscribe(o) })
     }
+
+    protected[bacon] def hasObservers = dispatcher.hasObservers
   }
 
   sealed trait Event[A] {
@@ -130,6 +134,7 @@ object Bacon {
       checkUnsub
       !observers.isEmpty
     }
+    protected[bacon] def hasObservers = !observers.isEmpty
     private def checkUnsub = (observers.length, unsubFromSrc) match {
       case (0, Some(f)) => 
         f()
