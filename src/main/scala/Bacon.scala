@@ -79,11 +79,6 @@ object Bacon {
     private var commandQueue: Queue[() => Unit] = new Queue(1000)
 
     def subscribe(obs: Observer[T]): Dispose = {
-      val unsubThis: Dispose = () => queued {
-        removeObserver(obs)
-        checkUnsub
-      }
-
       queued {
         if (ended) {
           obs(End())
@@ -95,7 +90,10 @@ object Bacon {
         }
       }
 
-      unsubThis
+      () => queued {
+        removeObserver(obs)
+        checkUnsub
+      }
     }
     private def queued(block: => Unit) {
       commandQueue.add(() => block)
@@ -108,6 +106,10 @@ object Bacon {
       eventQueue.add(event)
       scheduleProcessing
       true
+    }
+    private def checkUnsub = (observers.length, unsubFromSrc) match {
+      case (1, Some(f)) => f
+      case _            =>
     }
     private def scheduleProcessing {
       Scheduler.delay(0) {
@@ -127,10 +129,6 @@ object Bacon {
           }
         }
       }
-    }
-    private def checkUnsub = (observers.length, unsubFromSrc) match {
-      case (1, Some(f)) => f
-      case _            =>
     }
   }
 
