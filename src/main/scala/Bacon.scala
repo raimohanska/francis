@@ -22,17 +22,19 @@ object Bacon {
     }
     fromPoll(delay, () => poll)
   }
-  def fromPoll[T](delay: Long, poll: (() => Event[T])) = {
-    val scheduler = Scheduler.newScheduler
+  def fromPoll[T](delay: Long, poll: (() => Event[T]), scheduler: Scheduler = Scheduler.newScheduler) = {
+    var nextEvent = System.currentTimeMillis + delay
     new EventStream[T]({
       dispatcher: Observer[T] => {
         val ended = new Flag
         def schedule {
-          scheduler.queue(delay) {
+          val timeToNext = math.max(nextEvent - System.currentTimeMillis, 0)
+          scheduler.queue(timeToNext) {
             if (!ended.get) {
               val event = poll()
               val continue = dispatcher(event)
               if (continue && !event.isEnd) {
+                nextEvent = System.currentTimeMillis + delay
                 schedule
               }
             }
@@ -47,17 +49,59 @@ object Bacon {
   type Handler[A,B] = ((Event[A], (Event[B] => Boolean)) => Boolean)
 
   trait Observable[A] {
+    protected[bacon] def scheduler: Scheduler
     def subscribe(obs: Observer[A]): Dispose
-    def withHandler[B](handler: Handler[A, B]): EventStream[B]
-    def map[B](f: (A => B)): EventStream[B] = withHandler((event, push) => push(event.fmap(f)))
+    def withHandler[B](handler: Handler[A, B], scheduler: Scheduler = this.scheduler): EventStream[B]
+    def map[B](f: (A => B)): EventStream[B] = {
+      withHandler((event, push) => push(event.fmap(f)))
+    }
+    def withScheduler(scheduler: Scheduler): EventStream[A] = {
+      withHandler((event, push) => push(event), scheduler)
+    }
   }
-  class EventStream[A](subscribeFunc: (Observer[A] => Dispose)) extends Observable[A] {
-    private val dispatcher = new Dispatcher[A, A](subscribeFunc, { (event: Event[A], push: (Event[A] => Boolean)) => push(event)})
+  class EventStream[A](subscribeFunc: (Observer[A] => Dispose), protected[bacon] val scheduler: Scheduler = Scheduler.newScheduler) extends Observable[A] {
+    private val dispatcher = new Dispatcher[A, A](subscribeFunc, { (event: Event[A], push: (Event[A] => Boolean)) => push(event)}, scheduler)
+
     def subscribe(obs: Observer[A]) = dispatcher.subscribe(obs)
 
-    def withHandler[B](handler: Handler[A, B]): EventStream[B] = {
+    def withHandler[B](handler: Handler[A, B], scheduler: Scheduler = this.scheduler): EventStream[B] = {
       val dispatcher = new Dispatcher[A, B]({ o: Observer[A] => this.subscribe(o)}, handler)
-      new EventStream({ o: Observer[B] => dispatcher.subscribe(o) })
+      new EventStream({ o: Observer[B] => dispatcher.subscribe(o) }, scheduler)
+    }
+
+    def merge(other: EventStream[A]) = {
+      val left = this
+      val right = other.withScheduler(this.scheduler)
+      new EventStream[A]({
+        observer: Observer[A] => {
+          var unsubLeft = nop
+          var unsubRight = nop
+          var unsubscribed = false
+          def unsubBoth {
+            unsubLeft()
+            unsubRight()
+            unsubscribed = true
+          }
+          var ends = 0
+          def handleEvent(event: Event[A]) = {
+            if (event.isEnd) {
+              ends = ends + 1
+              if (ends == 2) {
+                observer(End())
+              } else {
+                true
+              }
+            } else {
+              val continue = observer(event)
+              if (!continue) unsubBoth
+              continue
+            }
+          }
+          unsubLeft = left.subscribe(handleEvent)
+          if (!unsubscribed) unsubRight = right.subscribe(handleEvent)
+          () => unsubBoth
+        }
+      })
     }
 
     protected[bacon] def hasObservers = dispatcher.hasObservers

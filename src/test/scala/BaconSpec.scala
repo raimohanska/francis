@@ -32,6 +32,13 @@ class BaconSpec extends Specification {
       expectStreamEvents(() => series(1, List(1,2,3)).map(_ * 10), 10, 20, 30)
     }
   }
+  "EventStream.merge" should {
+    "merge values from two streams" in {
+      expectStreamEvents(
+        () => series(2, List("a", "b")).merge(series(3, List("x", "y"))),
+        "a", "x", "b", "y")
+    }
+  }
 
   val unitTime = 10
   def T(units: Int): Int = units * unitTime
@@ -100,15 +107,15 @@ class BaconSpec extends Specification {
     }
     result.take
   }
-}
 
-class MVar[T] {
-  import java.util.concurrent._
-  private val queue = new ArrayBlockingQueue[T](1)
-  def put(value: T) { queue.put(value) }
-  def take: T = { 
-    val result = queue.poll(1, TimeUnit.SECONDS) 
-    if (result == null) throw new IllegalArgumentException("stream did not end")
-    result
+  class MVar[T] {
+    import java.util.concurrent._
+    private val queue = new ArrayBlockingQueue[T](1)
+    def put(value: T) { queue.put(value) }
+    def take: T = { 
+      val result = queue.poll(unitTime * 100, TimeUnit.MILLISECONDS) 
+      if (result == null) throw new IllegalArgumentException("stream did not end")
+      result
+    }
   }
 }
