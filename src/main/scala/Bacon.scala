@@ -104,6 +104,57 @@ object Bacon {
       })
     }
 
+    def flatMap[B](f: (A => EventStream[B])) = {
+      val scheduler = Scheduler.newScheduler
+      val root = this.withScheduler(scheduler)
+      new EventStream[B]({ observer: Observer[B] => 
+        var children: List[Dispose] = Nil
+        var rootEnd = false
+        var unsubRoot = nop
+        def unbind {
+          unsubRoot()
+          children.foreach(_())
+          children = Nil
+        }
+        def checkEnd {
+          if (rootEnd && children.isEmpty)
+            observer(End())
+        }
+        def spawn(event: Event[A]): Boolean = event match {
+          case End() => 
+            rootEnd = true
+            checkEnd
+            false
+          case Next(value) =>
+            val child = f(value).withScheduler(scheduler)
+            var unsubChild: Option[Dispose] = None
+            var childEnded = false
+            def removeChild {
+              unsubChild.foreach { f => children = remove(f, children) }
+              checkEnd
+            }
+            def handle(event: Event[B]): Boolean = event match {
+              case End() =>
+                removeChild
+                childEnded = true
+                false
+              case e@Next(value) =>
+                val continue = observer(e)
+                if (!continue) {
+                  unbind
+                }
+                continue
+            }
+            val unsub = child.subscribe(handle)
+            unsubChild = Some(unsub)
+            if (!childEnded) children = children :+ unsub
+            true
+        }
+        unsubRoot = root.subscribe(spawn)
+        () => unbind
+      })
+    }
+
     protected[bacon] def hasObservers = dispatcher.hasObservers
   }
 
@@ -155,10 +206,7 @@ object Bacon {
         }
       }
 
-      () => queued {
-        removeObserver(obs)
-        checkUnsub
-      }
+      () => removeObserver(obs)
     }
     private def handleSourceEvent(event: Event[A]) = {
       eventQueue.add(event)
@@ -169,19 +217,19 @@ object Bacon {
       commandQueue.add(() => block)
       scheduleProcessing
     }
-    private def removeObserver(o: Observer[B]) {
-      observers = observers.filterNot(_ == o)
+    private def removeObserver(o: Observer[B]) = queued {
+      observers = remove(o, observers)
+      checkUnsub
     }
     def push(event: Event[B]): Boolean = {
       observers.foreach { obs =>
         val continue = obs(event)
-        if (!continue) removeObserver(obs)
+        if (!continue || event.isEnd) removeObserver(obs)
       }
-      if (event.isEnd) observers = Nil
-      checkUnsub
-      !observers.isEmpty
+      true
     }
     protected[bacon] def hasObservers = !observers.isEmpty
+
     private def checkUnsub = (observers.length, unsubFromSrc) match {
       case (0, Some(f)) => 
         f()
@@ -214,7 +262,7 @@ object Bacon {
 
   class TimerScheduler extends Scheduler {
     private val timer = new java.util.Timer()
-    
+
     def queue(block: => Unit) = queue(0)(block)
     def queue(delay: Long)(block: => Unit) {
       timer.schedule(new java.util.TimerTask {
@@ -227,4 +275,7 @@ object Bacon {
   type Queue[T] = java.util.concurrent.ArrayBlockingQueue[T]
 
   val nop: Dispose = () => {}
+  private def remove[T](x: T, xs : List[T]): List[T] = {
+    xs.filterNot(_ == x)
+  }
 }

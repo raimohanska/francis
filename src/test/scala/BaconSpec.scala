@@ -39,6 +39,22 @@ class BaconSpec extends Specification {
         "a", "x", "b", "y")
     }
   }
+  "EventStream.flatMap" should {
+    "spawn new streams and collect results" in {
+      expectStreamEvents(
+        () => series(1, List(1,2)).flatMap {
+          value => series(2, List(value, value))
+        },
+        1, 2, 1, 2
+      )
+      expectStreamEvents(
+        () => series(3, List(1,2)).flatMap {
+          value => series(1, List(value, value))
+        },
+        1, 1, 2, 2
+      )
+    }
+  }
 
   val unitTime = 10
   def T(units: Int): Int = units * unitTime
