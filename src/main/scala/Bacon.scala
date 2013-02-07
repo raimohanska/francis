@@ -23,11 +23,12 @@ object Bacon {
     fromPoll(delay, () => poll)
   }
   def fromPoll[T](delay: Long, poll: (() => Event[T])) = {
+    val scheduler = Scheduler.newScheduler
     new EventStream[T]({
       dispatcher: Observer[T] => {
         val ended = new Flag
         def schedule {
-          Scheduler.delay(delay) {
+          scheduler.queue(delay) {
             if (!ended.get) {
               val event = poll()
               val continue = dispatcher(event)
@@ -89,7 +90,9 @@ object Bacon {
   type Observer[A] = (Event[A] => Boolean)
   type Dispose = (() => Unit)
 
-  class Dispatcher[A, B](subscribeFunc: (Observer[A] => Dispose), handler: Handler[A, B]) {
+  class Dispatcher[A, B](subscribeFunc: (Observer[A] => Dispose), 
+                         handler: Handler[A, B],
+                         scheduler: Scheduler = Scheduler.newScheduler) {
     private var unsubFromSrc: Option[Dispose] = None
     private var observers: List[Observer[B]] = Nil
     private var ended = false
@@ -141,7 +144,7 @@ object Bacon {
       case _            =>
     }
     private def scheduleProcessing {
-      Scheduler.delay(0) {
+      scheduler.queue {
         while (!commandQueue.isEmpty || !eventQueue.isEmpty) {
           if (!commandQueue.isEmpty) {
             val task = commandQueue.poll()
@@ -156,9 +159,20 @@ object Bacon {
     }
   }
 
+  trait Scheduler {
+    def queue(block: => Unit)
+    def queue(delay: Long)(block: => Unit)
+  }
+
   object Scheduler {
+    def newScheduler: Scheduler = new TimerScheduler
+  }
+
+  class TimerScheduler extends Scheduler {
     private val timer = new java.util.Timer()
-    def delay(delay: Long)(block: => Unit) {
+    
+    def queue(block: => Unit) = queue(0)(block)
+    def queue(delay: Long)(block: => Unit) {
       timer.schedule(new java.util.TimerTask {
         def run = block
       }, delay)
