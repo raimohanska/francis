@@ -63,9 +63,6 @@ object Bacon {
           true
       })
     }
-    def withScheduler(scheduler: Scheduler): EventStream[A] = {
-      withHandler((event, push) => push(event), scheduler)
-    }
   }
   class EventStream[A](subscribeFunc: (Observer[A] => Dispose), protected[bacon] val scheduler: Scheduler = Scheduler.newScheduler) extends Observable[A] {
     private val dispatcher = new Dispatcher[A, A](subscribeFunc, { (event: Event[A], push: (Event[A] => Boolean)) => push(event)}, scheduler)
@@ -77,6 +74,9 @@ object Bacon {
       new EventStream({ o: Observer[B] => dispatcher.subscribe(o) }, scheduler)
     }
 
+    def withScheduler(scheduler: Scheduler): EventStream[A] = {
+      if (scheduler == this.scheduler) this else withHandler((event, push) => push(event), scheduler)
+    }
     def merge(other: EventStream[A]) = {
       val left = this
       val right = other.withScheduler(this.scheduler)
