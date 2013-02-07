@@ -15,19 +15,22 @@ class BaconSpec extends Specification {
   }
   "Bacon.later" should {
     "produce one value" in {
-      expectStreamEvents(() => Bacon.later(100, "hello"), "hello")
+      expectStreamEvents(() => Bacon.later(T(1), "hello"), "hello")
     }
   }
   "Bacon.sequentially" should {
     "produce a list of values" in {
-      expectStreamEvents(() => Bacon.sequentially(100, List(1,2,3)), 1,2,3)
+      expectStreamEvents(() => Bacon.sequentially(T(1), List(1,2,3)), 1,2,3)
     }
   }
   "EventStream.map" should {
     "map values using given function" in {
-      expectStreamEvents(() => Bacon.sequentially(100, List(1,2,3)).map(_ * 10), 10, 20, 30)
+      expectStreamEvents(() => Bacon.sequentially(T(1), List(1,2,3)).map(_ * 10), 10, 20, 30)
     }
   }
+
+  val unitTime = 10
+  def T(units: Int): Int = units * unitTime
 
   def expectStreamEvents[T](src: () => EventStream[T], expectedValues: T*) = {
     verifySingleObserver(src, expectedValues : _*)
