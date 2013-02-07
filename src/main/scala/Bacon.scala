@@ -155,6 +155,10 @@ object Bacon {
       })
     }
 
+    def delay(millis: Int): EventStream[A] = {
+      flatMap { value => later(millis, value) }
+    }
+
     protected[bacon] def hasObservers = dispatcher.hasObservers
   }
 

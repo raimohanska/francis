@@ -55,6 +55,16 @@ class BaconSpec extends Specification {
       )
     }
   }
+  "EventStream.delay" should {
+    "delay each event by given number of millis" in {
+      expectStreamEvents(
+        () => { val left = series(2, List(1, 2, 3))
+                val right = series(1, List(4, 5, 6)).delay(T(6))
+                left.merge(right)
+        },
+        1, 2, 3, 4, 5, 6)
+    }
+  }
 
   val unitTime = 10
   def T(units: Int): Int = units * unitTime
