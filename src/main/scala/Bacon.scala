@@ -55,6 +55,14 @@ object Bacon {
     def map[B](f: (A => B)): EventStream[B] = {
       withHandler((event, push) => push(event.fmap(f)))
     }
+    def filter(f: (A => Boolean)): EventStream[A] = {
+      withHandler((event, push) => {
+        if (event.filter(f))
+          push(event)
+        else
+          true
+      })
+    }
     def withScheduler(scheduler: Scheduler): EventStream[A] = {
       withHandler((event, push) => push(event), scheduler)
     }
@@ -167,12 +175,14 @@ object Bacon {
     def isEnd: Boolean = false
     def isNext: Boolean = false
     def fmap[B](f: (A => B)): Event[B]
+    def filter(f: (A => Boolean)): Boolean = true
   }
 
   trait ValueEvent[A] extends Event[A] {
     override def hasValue = true
     def value: A
     override def toString = value.toString
+    override def filter(f: (A => Boolean)) = f(value)
   }
 
   case class Next[A](value: A) extends ValueEvent[A] {

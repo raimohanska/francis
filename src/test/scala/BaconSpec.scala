@@ -32,6 +32,11 @@ class BaconSpec extends Specification {
       expectStreamEvents(() => series(1, List(1,2,3)).map(_ * 10), 10, 20, 30)
     }
   }
+  "EventStream.filter" should {
+    "filter values using given function" in {
+      expectStreamEvents(() => series(1, List(1,2,3,4,5)).filter(_ % 2 == 0), 2, 4)
+    }
+  }
   "EventStream.merge" should {
     "merge values from two streams" in {
       expectStreamEvents(
