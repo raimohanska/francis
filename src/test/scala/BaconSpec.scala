@@ -23,13 +23,11 @@ class BaconSpec extends Specification {
       expectStreamEvents(() => Bacon.sequentially(100, List(1,2,3)), 1,2,3)
     }
   }
-  /*
   "EventStream.map" should {
     "map values using given function" in {
-      expectStreamEvents(() => Bacon.sequentially(100, List(1,2,3)).map(_ * 2), 2, 4, 6)
+      expectStreamEvents(() => Bacon.sequentially(100, List(1,2,3)).map(_ * 10), 10, 20, 30)
     }
   }
-  */
 
   def expectStreamEvents[T](src: () => EventStream[T], expectedValues: T*) = {
     verifySingleObserver(src, expectedValues : _*)

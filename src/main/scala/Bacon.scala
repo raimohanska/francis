@@ -46,6 +46,7 @@ object Bacon {
   trait Observable[A] {
     def subscribe(obs: Observer[A]): Dispose
     def withHandler[B](handler: Handler[A, B]): EventStream[B]
+    def map[B](f: (A => B)): EventStream[B] = withHandler((event, push) => push(event.fmap(f)))
   }
   class EventStream[A](subscribeFunc: (Observer[A] => Dispose)) extends Observable[A] {
     private val dispatcher = new Dispatcher[A, A](subscribeFunc, { (event: Event[A], push: (Event[A] => Boolean)) => push(event)})
@@ -57,33 +58,38 @@ object Bacon {
     }
   }
 
-  sealed trait Event[T] {
+  sealed trait Event[A] {
     def hasValue: Boolean = false
     def isEnd: Boolean = false
     def isNext: Boolean = false
+    def fmap[B](f: (A => B)): Event[B]
   }
 
-  trait ValueEvent[T] extends Event[T] {
+  trait ValueEvent[A] extends Event[A] {
     override def hasValue = true
-    def value: T
+    def value: A
+    override def toString = value.toString
   }
 
-  case class Next[T](value: T) extends ValueEvent[T] {
+  case class Next[A](value: A) extends ValueEvent[A] {
     override def isNext = true
+    def fmap[B](f: (A => B)) = Next(f(value))
   }
 
-  case class End[T] extends Event[T] {
+  case class End[A] extends Event[A] {
     override def isEnd = true
+    def fmap[B](f: (A => B)) = End()
+    override def toString = "<end>"
   }
 
-  type Observer[T] = (Event[T] => Boolean)
+  type Observer[A] = (Event[A] => Boolean)
   type Dispose = (() => Unit)
 
   class Dispatcher[A, B](subscribeFunc: (Observer[A] => Dispose), handler: Handler[A, B]) {
     private var unsubFromSrc: Option[Dispose] = None
     private var observers: List[Observer[B]] = Nil
     private var ended = false
-    private var eventQueue: Queue[Event[B]] = new Queue(1000)
+    private var eventQueue: Queue[Event[A]] = new Queue(1000)
     private var commandQueue: Queue[() => Unit] = new Queue(1000)
 
     def subscribe(obs: Observer[B]): Dispose = {
@@ -104,7 +110,9 @@ object Bacon {
       }
     }
     private def handleSourceEvent(event: Event[A]) = {
-      handler(event, push)
+      eventQueue.add(event)
+      scheduleProcessing
+      true
     }
     private def queued(block: => Unit) {
       commandQueue.add(() => block)
@@ -114,12 +122,17 @@ object Bacon {
       observers = observers.filterNot(_ == o)
     }
     def push(event: Event[B]): Boolean = {
-      eventQueue.add(event)
-      scheduleProcessing
-      true
+      observers.foreach { obs =>
+        val continue = obs(event)
+        if (!continue) removeObserver(obs)
+      }
+      if (event.isEnd) observers = Nil
+      checkUnsub
+      !observers.isEmpty
     }
     private def checkUnsub = (observers.length, unsubFromSrc) match {
-      case (1, Some(f)) => f
+      case (0, Some(f)) => 
+        f()
       case _            =>
     }
     private def scheduleProcessing {
@@ -131,12 +144,7 @@ object Bacon {
           } else {
             val event = eventQueue.poll()
             if (event.isEnd) ended = true
-            observers.foreach { obs =>
-              val continue = obs(event)
-              if (!continue) removeObserver(obs)
-            }
-            if (event.isEnd) observers = Nil
-            checkUnsub
+            handler(event, push)
           }
         }
       }
