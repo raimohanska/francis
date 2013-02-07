@@ -20,9 +20,9 @@ object Bacon {
       else
         End()
     }
-    fromPoll(delay, () => poll)
+    fromPoll(delay, poll)
   }
-  def fromPoll[T](delay: Long, poll: (() => Event[T]), scheduler: Scheduler = Scheduler.newScheduler) = {
+  def fromPoll[T](delay: Long, poll: => Event[T], scheduler: Scheduler = Scheduler.newScheduler) = {
     var nextEvent = System.currentTimeMillis + delay
     new EventStream[T]({
       dispatcher: Observer[T] => {
@@ -31,7 +31,7 @@ object Bacon {
           val timeToNext = math.max(nextEvent - System.currentTimeMillis, 0)
           scheduler.queue(timeToNext) {
             if (!ended.get) {
-              val event = poll()
+              val event = poll
               val continue = dispatcher(event)
               if (continue && !event.isEnd) {
                 nextEvent = System.currentTimeMillis + delay
