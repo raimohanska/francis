@@ -75,7 +75,8 @@ object Bacon {
     private var unsubFromSrc: Option[Dispose] = None
     private var observers: List[Observer[T]] = Nil
     private var ended = false
-    private var queue: Queue[() => Unit] = new Queue(1000)
+    private var eventQueue: Queue[Event[T]] = new Queue(1000)
+    private var commandQueue: Queue[() => Unit] = new Queue(1000)
 
     def subscribe(obs: Observer[T]): Dispose = {
       val unsubThis: Dispose = () => queued {
@@ -97,28 +98,35 @@ object Bacon {
       unsubThis
     }
     private def queued(block: => Unit) {
-      queue.add(() => block)
-      Scheduler.delay(0) {
-        while (!queue.isEmpty()) {
-          val task = queue.poll()
-          task()
-        }
-      }
+      commandQueue.add(() => block)
+      scheduleProcessing
     }
     private def removeObserver(o: Observer[T]) {
       observers = observers.filterNot(_ == o)
     }
     private def handleEvent(event: Event[T]) = {
-      queued {
-        if (event.isEnd) ended = true
-        observers.foreach { obs =>
-          val continue = obs(event)
-          if (!continue) removeObserver(obs)
-        }
-        if (event.isEnd) observers = Nil
-        checkUnsub
-      }
+      eventQueue.add(event)
+      scheduleProcessing
       true
+    }
+    private def scheduleProcessing {
+      Scheduler.delay(0) {
+        while (!commandQueue.isEmpty || !eventQueue.isEmpty) {
+          if (!commandQueue.isEmpty) {
+            val task = commandQueue.poll()
+            task()
+          } else {
+            val event = eventQueue.poll()
+            if (event.isEnd) ended = true
+            observers.foreach { obs =>
+              val continue = obs(event)
+              if (!continue) removeObserver(obs)
+            }
+            if (event.isEnd) observers = Nil
+            checkUnsub
+          }
+        }
+      }
     }
     private def checkUnsub = (observers.length, unsubFromSrc) match {
       case (1, Some(f)) => f
