@@ -5,7 +5,7 @@ import org.specs2.mutable._
 import Bacon._
 
 class BaconSpec extends Specification {
-  args(sequential=true)
+  sequential
 
   "Bacon.once" should {
     "produce one value" in {
