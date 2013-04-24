@@ -56,6 +56,10 @@ object Bacon {
       case Next(a) => callback(a); true
       case _ => true
     }
+    def onEnd(callback: () => Any): Dispose = subscribe {
+      case End() => callback(); true
+      case _ => true
+    }
   }
 
   class Bus[A](scheduler: Scheduler = Scheduler.newScheduler) extends EventStream[A](scheduler) {
@@ -69,6 +73,10 @@ object Bacon {
 
     def push(value: A) = {
       dispatcher.push(Next(value))
+    }
+
+    def end = {
+      dispatcher.push(End())
     }
   }
 
@@ -216,7 +224,7 @@ object Bacon {
   type Observer[A] = (Event[A] => WantMore)
   type Dispose = (() => Unit)
   type WantMore = Boolean
-  
+
   protected [bacon] object Handlers {
     def map[A, B](f: (A => B)): Handler[A, B] = {
       (event, push) => push(event.fmap(f))
@@ -247,14 +255,14 @@ object Bacon {
         } else {
           observers = observers :+ obs
           if (observers.length == 1) {
-              unsubFromSrc = Some(subscribeFunc(handleSourceEvent))
+              unsubFromSrc = Some(subscribeFunc(push))
           }
         }
       }
 
       () => removeObserver(obs)
     }
-    private def handleSourceEvent(event: Event[A]) = {
+    def push(event: Event[A]) = {
       eventQueue.add(event)
       scheduleProcessing
       true
@@ -267,7 +275,7 @@ object Bacon {
       observers = remove(o, observers)
       checkUnsub
     }
-    def push(event: Event[B]): WantMore = {
+    private def pushToObservers(event: Event[B]): WantMore = {
       observers.foreach { obs =>
         val continue = obs(event)
         if (!continue || event.isEnd) removeObserver(obs)
@@ -289,8 +297,10 @@ object Bacon {
             task()
           } else {
             val event = eventQueue.poll()
-            if (event.isEnd) ended = true
-            handler(event, push)
+            if (event.isEnd) {
+              ended = true
+            }
+            handler(event, pushToObservers)
           }
         }
       }

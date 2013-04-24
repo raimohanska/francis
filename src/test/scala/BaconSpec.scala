@@ -6,7 +6,6 @@ import Bacon._
 
 class BaconSpec extends Specification {
   sequential
-
   "Bacon.once" should {
     "produce one value" in {
       expectStreamEvents(Bacon.once("bacon"), "bacon")
@@ -72,12 +71,15 @@ class BaconSpec extends Specification {
   }
   "Bus" should {
     "deliver pushed events" in {
-      val bus = new Bus[Int]()
-      var elements: List[Int] = Nil
-      bus.onValue(x => elements = elements :+ x)
-      bus.push(1)
-      bus.push(2)
-      elements must_== List(1,2)
+      expectStreamEvents(
+        {
+          val s = series(1, List(1,2))
+          val bus = new Bus[Int](s.scheduler)
+          s.onValue{bus.push(_)}
+          s.onEnd{() => bus.end}
+          bus
+        }, 
+        1, 2)
     }
   }
 
