@@ -2,7 +2,7 @@ package bacon
 
 object Bacon {
   def once[T](value: T): EventStream[T] = fromList(List(value))
-  def fromList[T](values: Seq[T]): EventStream[T] = new EventStream[T]({
+  def fromList[T](values: Seq[T]): EventStream[T] = new EventStreamWithDispatcher[T]({
     observer: Observer[T] => {
       values.foreach { value => observer(Next(value)) }
       observer(End())
@@ -24,7 +24,7 @@ object Bacon {
   }
   def fromPoll[T](delay: Long, poll: => Event[T], scheduler: Scheduler = Scheduler.newScheduler) = {
     var nextEvent = System.currentTimeMillis + delay
-    new EventStream[T]({
+    new EventStreamWithDispatcher[T]({
       dispatcher: Observer[T] => {
         val ended = new Flag
         def schedule {
@@ -46,33 +46,32 @@ object Bacon {
     })
   }
 
-  type Handler[A,B] = ((Event[A], (Event[B] => Boolean)) => Boolean)
+  type Handler[A,B] = ((Event[A], (Event[B] => WantMore)) => WantMore)
 
   trait Observable[A] {
     protected[bacon] def scheduler: Scheduler
     def subscribe(obs: Observer[A]): Dispose
-    def withHandler[B](handler: Handler[A, B], scheduler: Scheduler = this.scheduler): EventStream[B]
-    def map[B](f: (A => B)): EventStream[B] = {
-      withHandler((event, push) => push(event.fmap(f)))
-    }
-    def filter(f: (A => Boolean)): EventStream[A] = {
-      withHandler((event, push) => {
-        if (event.filter(f))
-          push(event)
-        else
-          true
-      })
-    }
   }
-  class EventStream[A](subscribeFunc: (Observer[A] => Dispose), protected[bacon] val scheduler: Scheduler = Scheduler.newScheduler) extends Observable[A] {
-    private val dispatcher = new Dispatcher[A, A](subscribeFunc, { (event: Event[A], push: (Event[A] => Boolean)) => push(event)}, scheduler)
 
+  class EventStreamWithDispatcher[A](subscribeFunc: (Observer[A] => Dispose),
+                                     scheduler: Scheduler = Scheduler.newScheduler)
+                                     extends EventStream[A](scheduler) {
+    protected val dispatcher = new Dispatcher[A, A](subscribeFunc, { (event: Event[A], push: (Event[A] => WantMore)) => push(event)}, scheduler)
     def subscribe(obs: Observer[A]) = dispatcher.subscribe(obs)
+  }
+
+  abstract class EventStream[A](protected[bacon] val scheduler: Scheduler) extends Observable[A] {
+    def subscribe(obs: Observer[A]): Dispose
+    protected def dispatcher: Dispatcher[A, A]
 
     def withHandler[B](handler: Handler[A, B], scheduler: Scheduler = this.scheduler): EventStream[B] = {
       val dispatcher = new Dispatcher[A, B]({ o: Observer[A] => this.subscribe(o)}, handler)
-      new EventStream({ o: Observer[B] => dispatcher.subscribe(o) }, scheduler)
+      new EventStreamWithDispatcher({ o: Observer[B] => dispatcher.subscribe(o) }, scheduler)
     }
+
+    def map[B](f: (A => B)): EventStream[B] = withHandler(Handlers.map(f))
+
+    def filter(f: (A => Boolean)): EventStream[A] = withHandler(Handlers.filter(f))
 
     def withScheduler(scheduler: Scheduler): EventStream[A] = {
       if (scheduler == this.scheduler) this else withHandler((event, push) => push(event), scheduler)
@@ -80,7 +79,7 @@ object Bacon {
     def merge(other: EventStream[A]) = {
       val left = this
       val right = other.withScheduler(this.scheduler)
-      new EventStream[A]({
+      new EventStreamWithDispatcher[A]({
         observer: Observer[A] => {
           var unsubLeft = nop
           var unsubRight = nop
@@ -115,7 +114,7 @@ object Bacon {
     def flatMap[B](f: (A => EventStream[B])) = {
       val scheduler = Scheduler.newScheduler
       val root = this.withScheduler(scheduler)
-      new EventStream[B]({ observer: Observer[B] => 
+      new EventStreamWithDispatcher[B]({ observer: Observer[B] => 
         var children: List[Dispose] = Nil
         var rootEnd = false
         var unsubRoot = nop
@@ -128,7 +127,7 @@ object Bacon {
           if (rootEnd && children.isEmpty)
             observer(End())
         }
-        def spawn(event: Event[A]): Boolean = event match {
+        def spawn(event: Event[A]): WantMore = event match {
           case End() => 
             rootEnd = true
             checkEnd
@@ -141,7 +140,7 @@ object Bacon {
               unsubChild.foreach { f => children = remove(f, children) }
               checkEnd
             }
-            def handle(event: Event[B]): Boolean = event match {
+            def handle(event: Event[B]): WantMore = event match {
               case End() =>
                 removeChild
                 childEnded = true
@@ -196,8 +195,23 @@ object Bacon {
     override def toString = "<end>"
   }
 
-  type Observer[A] = (Event[A] => Boolean)
+  type Observer[A] = (Event[A] => WantMore)
   type Dispose = (() => Unit)
+  type WantMore = Boolean
+  
+  protected [bacon] object Handlers {
+    def map[A, B](f: (A => B)): Handler[A, B] = {
+      (event, push) => push(event.fmap(f))
+    }
+    def filter[A](f: (A => Boolean)): Handler[A, A] = {
+      (event, push) => {
+        if (event.filter(f))
+          push(event)
+        else
+          true
+      }
+    }
+  }
 
   class Dispatcher[A, B](subscribeFunc: (Observer[A] => Dispose), 
                          handler: Handler[A, B],
@@ -235,7 +249,7 @@ object Bacon {
       observers = remove(o, observers)
       checkUnsub
     }
-    def push(event: Event[B]): Boolean = {
+    def push(event: Event[B]): WantMore = {
       observers.foreach { obs =>
         val continue = obs(event)
         if (!continue || event.isEnd) removeObserver(obs)
