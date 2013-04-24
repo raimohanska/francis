@@ -70,6 +70,16 @@ class BaconSpec extends Specification {
         1, 2, 3, 4, 5, 6)
     }
   }
+  "Bus" should {
+    "deliver pushed events" in {
+      val bus = new Bus[Int]()
+      var elements: List[Int] = Nil
+      bus.onValue(x => elements = elements :+ x)
+      bus.push(1)
+      bus.push(2)
+      elements must_== List(1,2)
+    }
+  }
 
   val unitTime = 10
   def T(units: Int): Int = units * unitTime

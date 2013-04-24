@@ -51,17 +51,35 @@ object Bacon {
   trait Observable[A] {
     protected[bacon] def scheduler: Scheduler
     def subscribe(obs: Observer[A]): Dispose
+    def withHandler[B](handler: Handler[A, B], scheduler: Scheduler = this.scheduler): EventStream[B]
+    def onValue(callback: (A => Any)): Dispose = subscribe {
+      case Next(a) => callback(a); true
+      case _ => true
+    }
+  }
+
+  class Bus[A](scheduler: Scheduler = Scheduler.newScheduler) extends EventStream[A](scheduler) {
+    private def subscribeInternal(observer: Observer[A]): Dispose = {
+      nop
+    }
+    protected val dispatcher = new Dispatcher[A, A](
+      subscribeInternal, 
+      { (event: Event[A], push: (Event[A] => WantMore)) => push(event)}, 
+      scheduler)
+
+    def push(value: A) = {
+      dispatcher.push(Next(value))
+    }
   }
 
   class EventStreamWithDispatcher[A](subscribeFunc: (Observer[A] => Dispose),
                                      scheduler: Scheduler = Scheduler.newScheduler)
                                      extends EventStream[A](scheduler) {
     protected val dispatcher = new Dispatcher[A, A](subscribeFunc, { (event: Event[A], push: (Event[A] => WantMore)) => push(event)}, scheduler)
-    def subscribe(obs: Observer[A]) = dispatcher.subscribe(obs)
   }
 
   abstract class EventStream[A](protected[bacon] val scheduler: Scheduler) extends Observable[A] {
-    def subscribe(obs: Observer[A]): Dispose
+    def subscribe(obs: Observer[A]): Dispose = dispatcher.subscribe(obs)
     protected def dispatcher: Dispatcher[A, A]
 
     def withHandler[B](handler: Handler[A, B], scheduler: Scheduler = this.scheduler): EventStream[B] = {
