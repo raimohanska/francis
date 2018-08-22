@@ -46,66 +46,78 @@ object Bacon {
     })
   }
 
-  type Handler[A,B] = ((Event[A], (Event[B] => WantMore)) => WantMore)
+  type Sink[A] = (Event[A] => WantMore)
 
-  trait Observable[A] {
-    protected[bacon] def scheduler: Scheduler
-    def subscribe(obs: Observer[A]): Dispose
-    def withHandler[B](handler: Handler[A, B], scheduler: Scheduler = this.scheduler): EventStream[B]
-    def onValue(callback: (A => Any)): Dispose = subscribe {
-      case Next(a) => callback(a); true
-      case _ => true
-    }
-    def onEnd(callback: () => Any): Dispose = subscribe {
-      case End() => callback(); true
-      case _ => true
-    }
-  }
+  type Transformation[A,B] = ((Event[A], Sink[B]) => WantMore)
 
-  class Bus[A](scheduler: Scheduler = Scheduler.newScheduler) extends EventStream[A](scheduler) {
-    private def subscribeInternal(observer: Observer[A]): Dispose = {
-      nop
-    }
-    protected val dispatcher = new Dispatcher[A, A](
-      subscribeInternal, 
-      { (event: Event[A], push: (Event[A] => WantMore)) => push(event)}, 
-      scheduler)
+  trait FlatMapable[A, C[_]] {
+    this: C[A] with Observable[A] with Transformable[A, C] =>
 
-    def push(value: A) = {
-      dispatcher.push(Next(value))
+    def withScheduler(scheduler: Scheduler): C[A] with Observable[A] = {
+      if (scheduler == this.scheduler)
+        this
+      else
+        transform((event, push) => push(event), scheduler)
     }
 
-    def end = {
-      dispatcher.push(End())
+    def spawn[B](subscribeFunc: (Observer[B] => Dispose),
+                 scheduler: Scheduler = Scheduler.newScheduler): C[B]
+
+    def flatMap[B](f: (A => EventStream[B])): C[B] = {
+      val scheduler = Scheduler.newScheduler
+      val root = this.withScheduler(scheduler)
+      this.spawn[B]({ observer: Observer[B] =>
+        var children: List[Dispose] = Nil
+        var rootEnd = false
+        var unsubRoot: Dispose = nop
+        def unbind {
+          unsubRoot()
+          children.foreach(_())
+          children = Nil
+        }
+        def checkEnd {
+          if (rootEnd && children.isEmpty)
+            observer(End())
+        }
+        def spawn(event: Event[A]): WantMore = event match {
+          case End() =>
+            rootEnd = true
+            checkEnd
+            false
+          case Next(value) =>
+            val child = f(value).withScheduler(scheduler)
+            var unsubChild: Option[Dispose] = None
+            var childEnded = false
+            def removeChild {
+              unsubChild.foreach { f => children = remove(f, children) }
+              checkEnd
+            }
+            def handle(event: Event[B]): WantMore = event match {
+              case End() =>
+                removeChild
+                childEnded = true
+                false
+              case e@Next(value) =>
+                val continue = observer(e)
+                if (!continue) {
+                  unbind
+                }
+                continue
+            }
+            val unsub = child.subscribe(handle)
+            unsubChild = Some(unsub)
+            if (!childEnded) children = children :+ unsub
+            true
+        }
+        unsubRoot = root.subscribe(event => spawn(event))
+        () => unbind
+      })
     }
-  }
 
-  class EventStreamWithDispatcher[A](subscribeFunc: (Observer[A] => Dispose),
-                                     scheduler: Scheduler = Scheduler.newScheduler)
-                                     extends EventStream[A](scheduler) {
-    protected val dispatcher = new Dispatcher[A, A](subscribeFunc, { (event: Event[A], push: (Event[A] => WantMore)) => push(event)}, scheduler)
-  }
-
-  abstract class EventStream[A](protected[bacon] val scheduler: Scheduler) extends Observable[A] {
-    def subscribe(obs: Observer[A]): Dispose = dispatcher.subscribe(obs)
-    protected def dispatcher: Dispatcher[A, A]
-
-    def withHandler[B](handler: Handler[A, B], scheduler: Scheduler = this.scheduler): EventStream[B] = {
-      val dispatcher = new Dispatcher[A, B]({ o: Observer[A] => this.subscribe(o)}, handler)
-      new EventStreamWithDispatcher({ o: Observer[B] => dispatcher.subscribe(o) }, scheduler)
-    }
-
-    def map[B](f: (A => B)): EventStream[B] = withHandler(Handlers.map(f))
-
-    def filter(f: (A => Boolean)): EventStream[A] = withHandler(Handlers.filter(f))
-
-    def withScheduler(scheduler: Scheduler): EventStream[A] = {
-      if (scheduler == this.scheduler) this else withHandler((event, push) => push(event), scheduler)
-    }
-    def merge(other: EventStream[A]) = {
+    def merge(other: FlatMapable[A, C]): C[A] = {
       val left = this
       val right = other.withScheduler(this.scheduler)
-      new EventStreamWithDispatcher[A]({
+      spawn[A]({
         observer: Observer[A] => {
           var unsubLeft = nop
           var unsubRight = nop
@@ -137,59 +149,72 @@ object Bacon {
       })
     }
 
-    def flatMap[B](f: (A => EventStream[B])) = {
-      val scheduler = Scheduler.newScheduler
-      val root = this.withScheduler(scheduler)
-      new EventStreamWithDispatcher[B]({ observer: Observer[B] => 
-        var children: List[Dispose] = Nil
-        var rootEnd = false
-        var unsubRoot = nop
-        def unbind {
-          unsubRoot()
-          children.foreach(_())
-          children = Nil
-        }
-        def checkEnd {
-          if (rootEnd && children.isEmpty)
-            observer(End())
-        }
-        def spawn(event: Event[A]): WantMore = event match {
-          case End() => 
-            rootEnd = true
-            checkEnd
-            false
-          case Next(value) =>
-            val child = f(value).withScheduler(scheduler)
-            var unsubChild: Option[Dispose] = None
-            var childEnded = false
-            def removeChild {
-              unsubChild.foreach { f => children = remove(f, children) }
-              checkEnd
-            }
-            def handle(event: Event[B]): WantMore = event match {
-              case End() =>
-                removeChild
-                childEnded = true
-                false
-              case e@Next(value) =>
-                val continue = observer(e)
-                if (!continue) {
-                  unbind
-                }
-                continue
-            }
-            val unsub = child.subscribe(handle)
-            unsubChild = Some(unsub)
-            if (!childEnded) children = children :+ unsub
-            true
-        }
-        unsubRoot = root.subscribe(spawn)
-        () => unbind
-      })
+    def delay(millis: Int): C[A] = {
+      flatMap { value => later(millis, value) }
+    }
+  }
+
+  trait Transformable[A, C[_]] {
+    protected[bacon] def scheduler: Scheduler
+
+
+    def transform[B](handler: Transformation[A, B], scheduler: Scheduler = this.scheduler): C[B] with Observable[B]
+
+    def map[B](f: (A => B)): C[B] = transform(Transformations.map(f))
+
+    def filter(f: (A => Boolean)): C[A] = transform(Transformations.filter(f))
+  }
+
+  trait Observable[A] {
+    def subscribe(obs: Observer[A]): Dispose
+
+    def onValue(callback: (A => Any)): Dispose = subscribe {
+      case Next(a) => callback(a); true
+      case _ => true
+    }
+    def onEnd(callback: () => Any): Dispose = subscribe {
+      case End() => callback(); true
+      case _ => true
+    }
+  }
+
+  class Bus[A](scheduler: Scheduler = Scheduler.newScheduler) extends EventStream[A](scheduler) {
+    private def subscribeInternal(observer: Observer[A]): Dispose = {
+      nop
+    }
+    protected val dispatcher = new Dispatcher[A, A](
+      subscribeInternal,
+      { (event: Event[A], push: (Event[A] => WantMore)) => push(event)},
+      scheduler)
+
+    def push(value: A) = {
+      dispatcher.push(Next(value))
     }
 
-    def delay(millis: Int): EventStream[A] = {
-      flatMap { value => later(millis, value) }
+    def end = {
+      dispatcher.push(End())
+    }
+
+    def spawn[B](subscribeFunc: (Observer[B] => Dispose),
+                 scheduler: Scheduler = Scheduler.newScheduler) = new EventStreamWithDispatcher[B](subscribeFunc, scheduler)
+  }
+
+  class EventStreamWithDispatcher[A](subscribeFunc: (Observer[A] => Dispose),
+                                     scheduler: Scheduler = Scheduler.newScheduler)
+                                     extends EventStream[A](scheduler) {
+    protected val dispatcher = new Dispatcher[A, A](subscribeFunc, { (event: Event[A], push: (Event[A] => WantMore)) => push(event)}, scheduler)
+
+    def spawn[B](subscribeFunc: (Observer[B] => Dispose),
+                 scheduler: Scheduler = Scheduler.newScheduler) = new EventStreamWithDispatcher[B](subscribeFunc, scheduler)
+  }
+
+  abstract class EventStream[A](protected[bacon] val scheduler: Scheduler) extends Observable[A] with Transformable[A, EventStream] with FlatMapable[A, EventStream] {
+    def subscribe(obs: Observer[A]): Dispose = dispatcher.subscribe(obs)
+    protected def dispatcher: Dispatcher[A, A]
+
+    def transform[B](handler: Transformation[A, B], scheduler: Scheduler = this.scheduler): EventStream[B] = {
+      val dispatcher = new Dispatcher[A, B]({ o: Observer[A] => this.subscribe(o)}, handler)
+      new EventStreamWithDispatcher({ o: Observer[B] => dispatcher.subscribe(o) }, scheduler)
     }
 
     protected[bacon] def hasObservers = dispatcher.hasObservers
@@ -215,7 +240,7 @@ object Bacon {
     def fmap[B](f: (A => B)) = Next(f(value))
   }
 
-  case class End[A] extends Event[A] {
+  case class End[A]() extends Event[A] {
     override def isEnd = true
     def fmap[B](f: (A => B)) = End()
     override def toString = "<end>"
@@ -225,11 +250,11 @@ object Bacon {
   type Dispose = (() => Unit)
   type WantMore = Boolean
 
-  protected [bacon] object Handlers {
-    def map[A, B](f: (A => B)): Handler[A, B] = {
+  protected [bacon] object Transformations {
+    def map[A, B](f: (A => B)): Transformation[A, B] = {
       (event, push) => push(event.fmap(f))
     }
-    def filter[A](f: (A => Boolean)): Handler[A, A] = {
+    def filter[A](f: (A => Boolean)): Transformation[A, A] = {
       (event, push) => {
         if (event.filter(f))
           push(event)
@@ -239,8 +264,8 @@ object Bacon {
     }
   }
 
-  class Dispatcher[A, B](subscribeFunc: (Observer[A] => Dispose), 
-                         handler: Handler[A, B],
+  class Dispatcher[A, B](subscribeFunc: (Observer[A] => Dispose),
+                         handler: Transformation[A, B],
                          scheduler: Scheduler = Scheduler.newScheduler) {
     private var unsubFromSrc: Option[Dispose] = None
     private var observers: List[Observer[B]] = Nil
